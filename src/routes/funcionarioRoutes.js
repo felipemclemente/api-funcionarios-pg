@@ -8,4 +8,11 @@ router.get('/funcionarios/matricula/:matricula', controller.buscarPorMatricula);
 router.get('/funcionarios/nome/:nome', controller.buscarPorNome);
 router.patch('/funcionarios/:matricula/inativar', controller.inativarFuncionario);
 
+// 🔥 Nova rota: upload de planilha
+router.post(
+  '/funcionarios/importar',
+  upload.single('arquivo'),
+  controller.importarFuncionarios
+);
+
 module.exports = router;
