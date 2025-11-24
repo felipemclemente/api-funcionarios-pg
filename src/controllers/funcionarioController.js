@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const XLSX = require('xlsx');
 
 // CADASTRAR FUNCIONÁRIO
 exports.criarFuncionario = async (req, res) => {
@@ -262,5 +263,106 @@ exports.importarFuncionarios = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ mensagem: 'Erro ao importar planilha' });
+  }
+};
+
+// LISTAR FUNCIONÁRIOS COM FILTROS E PAGINAÇÃO
+exports.listarFuncionarios = async (req, res) => {
+  try {
+    let {
+      page = 1,
+      limit = 10,
+      cargo,
+      ativo,
+      salarioMin,
+      salarioMax,
+      nome,
+      ordenarPor = 'nome',
+      ordem = 'asc'
+    } = req.query;
+
+    page = Number(page);
+    limit = Number(limit);
+    const offset = (page - 1) * limit;
+
+    const where = [];
+    const params = [];
+
+    // Filtro por cargo
+    if (cargo) {
+      where.push('cargo LIKE ?');
+      params.push(`%${cargo}%`);
+    }
+
+    // Filtro por ativo
+    if (ativo !== undefined) {
+      // aceita true/false, 1/0, sim/nao
+      const val = ativo.toString().toLowerCase();
+      const isAtivo = ['1', 'true', 'sim', 'ativo'].includes(val);
+      where.push('ativo = ?');
+      params.push(isAtivo ? 1 : 0);
+    }
+
+    // Filtro por faixa salarial mínima
+    if (salarioMin !== undefined) {
+      where.push('salario >= ?');
+      params.push(Number(salarioMin));
+    }
+
+    // Filtro por faixa salarial máxima
+    if (salarioMax !== undefined) {
+      where.push('salario <= ?');
+      params.push(Number(salarioMax));
+    }
+
+    // Filtro por nome (contém)
+    if (nome) {
+      where.push('nome LIKE ?');
+      params.push(`%${nome}%`);
+    }
+
+    // Monta cláusula WHERE
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    // Ordenação segura
+    const colunasOrdenacao = ['nome', 'salario', 'cargo', 'id'];
+    if (!colunasOrdenacao.includes(ordenarPor)) {
+      ordenarPor = 'nome';
+    }
+
+    ordem = ordem.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
+    // Query para contar total
+    const sqlCount = `
+      SELECT COUNT(*) AS total
+      FROM funcionarios
+      ${whereClause}
+    `;
+    const [countRows] = await pool.execute(sqlCount, params);
+    const total = countRows[0].total;
+
+    // Query para buscar dados paginados
+    const sql = `
+      SELECT *
+      FROM funcionarios
+      ${whereClause}
+      ORDER BY ${ordenarPor} ${ordem}
+      LIMIT ? OFFSET ?
+    `;
+
+    const paramsComPaginacao = [...params, limit, offset];
+
+    const [rows] = await pool.execute(sql, paramsComPaginacao);
+
+    return res.json({
+      pagina: page,
+      limite: limit,
+      total,
+      totalPaginas: Math.ceil(total / limit),
+      resultados: rows
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ mensagem: 'Erro ao listar funcionários' });
   }
 };
