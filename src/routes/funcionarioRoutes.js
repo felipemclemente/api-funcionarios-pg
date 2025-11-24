@@ -21,6 +21,9 @@ router.get('/funcionarios/nome/:nome', controller.buscarPorNome);
 // Inativar
 router.patch('/funcionarios/:matricula/inativar', controller.inativarFuncionario);
 
+// Histórico salarial por matrícula
+router.get('/funcionarios/:matricula/salarios', controller.historicoSalarial);
+
 // Importar via planilha
 router.post(
   '/funcionarios/importar',

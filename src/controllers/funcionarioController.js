@@ -5,6 +5,7 @@ const XLSX = require('xlsx');
 exports.criarFuncionario = async (req, res) => {
   try {
     const { nome, matricula, cpf, rg, endereco, cargo, salario, ativo } = req.body;
+
     if (!nome || !matricula || !cpf) {
       return res.status(400).json({
         mensagem: 'Nome, matrícula e CPF são obrigatórios'
@@ -22,7 +23,7 @@ exports.criarFuncionario = async (req, res) => {
       });
     }
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO funcionarios 
       (nome, matricula, cpf, rg, endereco, cargo, salario, ativo)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -38,12 +39,25 @@ exports.criarFuncionario = async (req, res) => {
       ]
     );
 
+    const funcionarioId = result.insertId;
+
+    // grava histórico salarial inicial (se tiver salário > 0)
+    if (salario && Number(salario) > 0) {
+      await pool.execute(
+        `INSERT INTO salarios_funcionario (funcionario_id, salario, data_inicio, data_fim)
+         VALUES (?, ?, NOW(), NULL)`,
+        [funcionarioId, salario]
+      );
+    }
+
     res.status(201).json({ mensagem: 'Funcionário cadastrado com sucesso' });
 
   } catch (error) {
+    console.error(error);
     res.status(500).json({ erro: 'Erro ao cadastrar funcionário' });
   }
 };
+
 
 // CONSULTAR POR MATRÍCULA
 exports.buscarPorMatricula = async (req, res) => {
@@ -75,37 +89,71 @@ exports.buscarPorNome = async (req, res) => {
 
 // ATUALIZAR FUNCIONÁRIO
 exports.atualizarFuncionario = async (req, res) => {
-  const { matricula } = req.params;
+  try {
+    const { matricula } = req.params;
 
-  const [existe] = await pool.execute(
-    'SELECT * FROM funcionarios WHERE matricula = ?',
-    [matricula]
-  );
+    const [existe] = await pool.execute(
+      'SELECT * FROM funcionarios WHERE matricula = ?',
+      [matricula]
+    );
 
-  if (existe.length === 0) {
-    return res.status(404).json({ mensagem: 'Funcionário não encontrado' });
+    if (existe.length === 0) {
+      return res.status(404).json({ mensagem: 'Funcionário não encontrado' });
+    }
+
+    const dados = existe[0];
+    const { nome, cpf, rg, endereco, cargo, salario, ativo } = req.body;
+
+    const novoSalario = salario !== undefined ? salario : dados.salario;
+
+    await pool.execute(
+      `UPDATE funcionarios SET
+        nome = ?, 
+        cpf = ?, 
+        rg = ?, 
+        endereco = ?, 
+        cargo = ?, 
+        salario = ?, 
+        ativo = ?
+       WHERE matricula = ?`,
+      [
+        nome ?? dados.nome,
+        cpf ?? dados.cpf,
+        rg ?? dados.rg,
+        endereco ?? dados.endereco,
+        cargo ?? dados.cargo,
+        novoSalario,
+        ativo ?? dados.ativo,
+        matricula
+      ]
+    );
+
+    // se o salário mudou, atualiza histórico
+    if (salario !== undefined && Number(salario) !== Number(dados.salario)) {
+      const funcionarioId = dados.id;
+
+      // fecha o registro anterior
+      await pool.execute(
+        `UPDATE salarios_funcionario
+         SET data_fim = NOW()
+         WHERE funcionario_id = ? AND data_fim IS NULL`,
+        [funcionarioId]
+      );
+
+      // insere novo registro
+      await pool.execute(
+        `INSERT INTO salarios_funcionario (funcionario_id, salario, data_inicio, data_fim)
+         VALUES (?, ?, NOW(), NULL)`,
+        [funcionarioId, salario]
+      );
+    }
+
+    res.json({ mensagem: 'Funcionário atualizado com sucesso' });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensagem: 'Erro ao atualizar funcionário' });
   }
-
-  const dados = existe[0];
-  const { nome, cpf, rg, endereco, cargo, salario, ativo } = req.body;
-
-  await pool.execute(
-    `UPDATE funcionarios SET
-      nome = ?, cpf = ?, rg = ?, endereco = ?, cargo = ?, salario = ?, ativo = ?
-     WHERE matricula = ?`,
-    [
-      nome ?? dados.nome,
-      cpf ?? dados.cpf,
-      rg ?? dados.rg,
-      endereco ?? dados.endereco,
-      cargo ?? dados.cargo,
-      salario ?? dados.salario,
-      ativo ?? dados.ativo,
-      matricula
-    ]
-  );
-
-  res.json({ mensagem: 'Funcionário atualizado com sucesso' });
 };
 
 // INATIVAR FUNCIONÁRIO
@@ -364,5 +412,39 @@ exports.listarFuncionarios = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ mensagem: 'Erro ao listar funcionários' });
+  }
+};
+
+//HISTÓRICO SALARIAL
+exports.historicoSalarial = async (req, res) => {
+  try {
+    const { matricula } = req.params;
+
+    const [funcRows] = await pool.execute(
+      'SELECT id, nome, matricula FROM funcionarios WHERE matricula = ?',
+      [matricula]
+    );
+
+    if (funcRows.length === 0) {
+      return res.status(404).json({ mensagem: 'Funcionário não encontrado' });
+    }
+
+    const funcionario = funcRows[0];
+
+    const [histRows] = await pool.execute(
+      `SELECT salario, data_inicio, data_fim
+       FROM salarios_funcionario
+       WHERE funcionario_id = ?
+       ORDER BY data_inicio DESC`,
+      [funcionario.id]
+    );
+
+    return res.json({
+      funcionario,
+      historico: histRows
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ mensagem: 'Erro ao consultar histórico salarial' });
   }
 };
